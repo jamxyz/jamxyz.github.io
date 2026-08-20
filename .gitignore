@@ -1,0 +1,8 @@
+# macOS Finder junk
+.DS_Store
+
+# Windows thumbnail cache
+Thumbs.db
+
+# Logs
+*.log
