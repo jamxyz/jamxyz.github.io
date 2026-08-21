@@ -76,48 +76,24 @@
       mount.style.position = "relative";
     }
     var watermark = document.createElement("div");
-    watermark.textContent = "jmclare.com";
+    watermark.textContent = "jmclare.com   ".repeat(8);
     watermark.style.position = "absolute";
-    watermark.style.left = "50%";
-    watermark.style.top = "50%";
-    watermark.style.transform = "translate(-50%, -50%)";
-    watermark.style.transition = "opacity 1.8s ease-in-out";
+    watermark.style.top = "0";
+    watermark.style.right = "6px";
+    watermark.style.height = "100%";
+    watermark.style.writingMode = "vertical-rl";
+    watermark.style.textOrientation = "mixed";
+    watermark.style.overflow = "hidden";
     watermark.style.fontFamily = "monospace";
     watermark.style.fontSize = "11px";
     watermark.style.letterSpacing = "0.25em";
     watermark.style.color = "#B7C2CC";
-    watermark.style.opacity = "0";
+    watermark.style.opacity = "0.38";
     watermark.style.fontWeight = "bold";
     watermark.style.pointerEvents = "none"; // never intercepts the wheel/mouse handlers below
     watermark.style.userSelect = "none";
     watermark.style.whiteSpace = "nowrap";
     mount.appendChild(watermark);
-
-    // Fades in at a random point inside the mount, holds briefly, fades
-    // back out, waits a random gap, then repeats at a new random point —
-    // an occasional flicker rather than a permanent fixture, so it never
-    // reads as a border or a fixed UI element.
-    var WATERMARK_VISIBLE_OPACITY = 0.35;
-    var WATERMARK_FADE_MS = 1800;
-    var WATERMARK_HOLD_MS = 2200;
-    var WATERMARK_GAP_MIN_MS = 5000;
-    var WATERMARK_GAP_MAX_MS = 13000;
-    var watermarkRunning = true;
-    var watermarkTimer = null;
-
-    function watermarkCycle() {
-      if (!watermarkRunning) return;
-      watermark.style.left = (10 + Math.random() * 80) + "%";
-      watermark.style.top = (10 + Math.random() * 80) + "%";
-      watermark.style.opacity = String(WATERMARK_VISIBLE_OPACITY);
-      watermarkTimer = setTimeout(function () {
-        if (!watermarkRunning) return;
-        watermark.style.opacity = "0";
-        var gap = WATERMARK_GAP_MIN_MS + Math.random() * (WATERMARK_GAP_MAX_MS - WATERMARK_GAP_MIN_MS);
-        watermarkTimer = setTimeout(watermarkCycle, WATERMARK_FADE_MS + gap);
-      }, WATERMARK_HOLD_MS);
-    }
-    watermarkTimer = setTimeout(watermarkCycle, 3000 + Math.random() * 4000);
 
     // ---------- circular sprite texture so points render as round atoms ----------
     function makeCircleTexture() {
@@ -344,6 +320,59 @@
     // only while it's directly over the widget.
     document.addEventListener("mousemove", handleMouseMove);
 
+    // Tilt has two separate jobs now, mapped from the two axes phones
+    // report:
+    //
+    // - gamma (left/right tilt) still feeds the same small, baseline-
+    //   relative nudge the mouse uses (mouseRawX) — a gentle lean, not a
+    //   structural change to the view.
+    //
+    // - beta (front/back tilt) is used ABSOLUTELY rather than relative to
+    //   a baseline: 0deg means the phone is lying flat (screen facing up,
+    //   like on a table) and maps to the helix's normal side-on view —
+    //   "in all its glory," full spiral visible. 90deg means the phone is
+    //   held upright, the ordinary way you'd hold it to browse, and maps
+    //   to the helix tipped 90deg so you're looking straight along its
+    //   length instead — through the tube from one end. Everything
+    //   between eases smoothly between those two views as the phone
+    //   tilts through the range.
+    //
+    // If this ends up reading as "looking down from the top" instead of
+    // "looking up from the bottom" once you try it on an actual phone,
+    // that's just the sign of DEVICE_TILT_SIGN below — flip it to -1.
+    var orientationBaseGamma = null;
+    var DEVICE_TILT_SIGN = 1;
+    var DEVICE_TILT_EASE = 0.03; // slower than the mouse nudge — this is a big structural swing, not a twitch
+    var deviceTiltTarget = 0; // 0 .. PI/2, the "flat table" -> "held upright" sweep
+    var deviceTilt = 0; // eased version actually applied in the render loop
+    function handleOrientation(e) {
+      if (e.beta == null || e.gamma == null) return;
+      if (orientationBaseGamma === null) {
+        orientationBaseGamma = e.gamma;
+      }
+      mouseRawX = THREE.MathUtils.clamp((e.gamma - orientationBaseGamma) / 30, -1, 1);
+      var betaClamped = THREE.MathUtils.clamp(e.beta, 0, 90);
+      deviceTiltTarget = DEVICE_TILT_SIGN * (betaClamped / 90) * (Math.PI / 2);
+    }
+    var orientationGateHandler = null;
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS 13+ requires a user gesture before it will grant motion access
+      // — can't just start listening on load. Requests permission on the
+      // first tap/touch anywhere on the page.
+      orientationGateHandler = function () {
+        DeviceOrientationEvent.requestPermission()
+          .then(function (state) {
+            if (state === "granted") {
+              window.addEventListener("deviceorientation", handleOrientation);
+            }
+          })
+          .catch(function () {});
+      };
+      document.addEventListener("touchend", orientationGateHandler, { once: true });
+    } else if (typeof window.DeviceOrientationEvent !== "undefined") {
+      window.addEventListener("deviceorientation", handleOrientation);
+    }
+
     var MIN_SCALE = 0.5;
     var MAX_SCALE = 1.2;
     var zoomTarget = 1;
@@ -355,57 +384,6 @@
       zoomTarget = THREE.MathUtils.clamp(zoomTarget * factor, MIN_SCALE, MAX_SCALE);
     }
     mount.addEventListener("wheel", handleWheel, { passive: false });
-
-    // ---------- shake to dissolve ----------
-    // Reuses the same scattered/drift state the periodic auto-dissolve
-    // already produces — a shake just forces an early trip into it rather
-    // than introducing a separate "starfield" object. Only takes effect
-    // while the helix is essentially fully formed (currentForm above the
-    // threshold below); shaking mid-dissolve or mid-reform is ignored so
-    // it can never snap backward or interrupt itself mid-transition.
-    var currentForm = 1;
-    var SHAKE_FORM_THRESHOLD = 0.95;
-    var SHAKE_MOTION_THRESHOLD = 18; // m/s^2 change between readings
-    var SHAKE_COOLDOWN_MS = 4000;
-    var lastAccel = null;
-    var lastShakeAt = 0;
-    var motionGateHandler = null;
-
-    function handleMotion(e) {
-      var a = e.accelerationIncludingGravity;
-      if (!a || a.x == null) return;
-      var now = Date.now();
-      if (lastAccel) {
-        var dx = a.x - lastAccel.x;
-        var dy = a.y - lastAccel.y;
-        var dz = a.z - lastAccel.z;
-        var delta = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (
-          delta > SHAKE_MOTION_THRESHOLD &&
-          currentForm > SHAKE_FORM_THRESHOLD &&
-          now - lastShakeAt > SHAKE_COOLDOWN_MS
-        ) {
-          lastShakeAt = now;
-          formClock = HOLD_FORMED; // jump straight to the dissolve boundary — form is already 1 there, so no visible snap
-        }
-      }
-      lastAccel = { x: a.x, y: a.y, z: a.z };
-    }
-    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-      // iOS 13+ requires a user gesture before granting motion access.
-      motionGateHandler = function () {
-        DeviceMotionEvent.requestPermission()
-          .then(function (state) {
-            if (state === "granted") {
-              window.addEventListener("devicemotion", handleMotion);
-            }
-          })
-          .catch(function () {});
-      };
-      document.addEventListener("touchend", motionGateHandler, { once: true });
-    } else if (typeof window.DeviceMotionEvent !== "undefined") {
-      window.addEventListener("devicemotion", handleMotion);
-    }
 
     // ---------- resize ----------
     var resizeObserver = new ResizeObserver(function () {
@@ -422,7 +400,6 @@
     var rafId;
     var clock = new THREE.Clock();
     var elapsed = 0;
-    var formClock = 0;
     var running = true;
 
     var posA = pointsA.geometry.attributes.position;
@@ -452,10 +429,8 @@
       rafId = requestAnimationFrame(animate);
       var dt = Math.min(clock.getDelta(), 0.05);
       elapsed += dt;
-      formClock += dt;
 
-      var form = formAmountAt(formClock);
-      currentForm = form;
+      var form = formAmountAt(elapsed);
 
       updateStrand(posA, formedA, scatteredA, driftA, form, elapsed);
       updateStrand(posB, formedB, scatteredB, driftB, form, elapsed);
@@ -497,6 +472,7 @@
       // replaces tiltX/tiltZ/spinSpeed, only nudges the final values.
       mouseX = THREE.MathUtils.lerp(mouseX, mouseRawX, MOUSE_EASE);
       mouseY = THREE.MathUtils.lerp(mouseY, mouseRawY, MOUSE_EASE);
+      deviceTilt = THREE.MathUtils.lerp(deviceTilt, deviceTiltTarget, DEVICE_TILT_EASE);
 
       var transitionBump = 4 * form * (1 - form); // 0..1, peaks mid-transition
       autoAngle += dt * (
@@ -506,7 +482,7 @@
       );
 
       group.rotation.y = autoAngle;
-      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH;
+      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH + deviceTilt;
       group.rotation.z = tiltZ + mouseX * MOUSE_TILT_STRENGTH * 0.5;
 
       renderer.render(scene, camera);
@@ -519,9 +495,9 @@
       resizeObserver.disconnect();
       mount.removeEventListener("wheel", handleWheel);
       document.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("devicemotion", handleMotion);
-      if (motionGateHandler) {
-        document.removeEventListener("touchend", motionGateHandler);
+      window.removeEventListener("deviceorientation", handleOrientation);
+      if (orientationGateHandler) {
+        document.removeEventListener("touchend", orientationGateHandler);
       }
       pointsA.geometry.dispose();
       pointsA.material.dispose();
@@ -531,10 +507,6 @@
       rungMat.dispose();
       circleTexture.dispose();
       renderer.dispose();
-      watermarkRunning = false;
-      if (watermarkTimer) {
-        clearTimeout(watermarkTimer);
-      }
       if (watermark.parentNode === mount) {
         mount.removeChild(watermark);
       }
