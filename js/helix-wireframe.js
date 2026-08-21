@@ -320,24 +320,39 @@
     // only while it's directly over the widget.
     document.addEventListener("mousemove", handleMouseMove);
 
-    // Tilt is tracked relative to whatever orientation the phone happened
-    // to be in on the very first reading, not to "flat on a table" — most
-    // people browse holding a phone at some resting angle already, and
-    // measuring from that baseline means a first gentle tilt registers
-    // immediately instead of fighting through however they were already
-    // holding it. /30 means a ~30 degree tilt from that starting point
-    // reaches full deflection — deliberately easy to trigger so it reads
-    // as clearly connected to the phone's movement, not a subtle easter egg.
-    var orientationBaseBeta = null;
+    // Tilt has two separate jobs now, mapped from the two axes phones
+    // report:
+    //
+    // - gamma (left/right tilt) still feeds the same small, baseline-
+    //   relative nudge the mouse uses (mouseRawX) — a gentle lean, not a
+    //   structural change to the view.
+    //
+    // - beta (front/back tilt) is used ABSOLUTELY rather than relative to
+    //   a baseline: 0deg means the phone is lying flat (screen facing up,
+    //   like on a table) and maps to the helix's normal side-on view —
+    //   "in all its glory," full spiral visible. 90deg means the phone is
+    //   held upright, the ordinary way you'd hold it to browse, and maps
+    //   to the helix tipped 90deg so you're looking straight along its
+    //   length instead — through the tube from one end. Everything
+    //   between eases smoothly between those two views as the phone
+    //   tilts through the range.
+    //
+    // If this ends up reading as "looking down from the top" instead of
+    // "looking up from the bottom" once you try it on an actual phone,
+    // that's just the sign of DEVICE_TILT_SIGN below — flip it to -1.
     var orientationBaseGamma = null;
+    var DEVICE_TILT_SIGN = 1;
+    var DEVICE_TILT_EASE = 0.03; // slower than the mouse nudge — this is a big structural swing, not a twitch
+    var deviceTiltTarget = 0; // 0 .. PI/2, the "flat table" -> "held upright" sweep
+    var deviceTilt = 0; // eased version actually applied in the render loop
     function handleOrientation(e) {
       if (e.beta == null || e.gamma == null) return;
-      if (orientationBaseBeta === null) {
-        orientationBaseBeta = e.beta;
+      if (orientationBaseGamma === null) {
         orientationBaseGamma = e.gamma;
       }
-      mouseRawY = THREE.MathUtils.clamp((e.beta - orientationBaseBeta) / 30, -1, 1);
       mouseRawX = THREE.MathUtils.clamp((e.gamma - orientationBaseGamma) / 30, -1, 1);
+      var betaClamped = THREE.MathUtils.clamp(e.beta, 0, 90);
+      deviceTiltTarget = DEVICE_TILT_SIGN * (betaClamped / 90) * (Math.PI / 2);
     }
     var orientationGateHandler = null;
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
@@ -457,6 +472,7 @@
       // replaces tiltX/tiltZ/spinSpeed, only nudges the final values.
       mouseX = THREE.MathUtils.lerp(mouseX, mouseRawX, MOUSE_EASE);
       mouseY = THREE.MathUtils.lerp(mouseY, mouseRawY, MOUSE_EASE);
+      deviceTilt = THREE.MathUtils.lerp(deviceTilt, deviceTiltTarget, DEVICE_TILT_EASE);
 
       var transitionBump = 4 * form * (1 - form); // 0..1, peaks mid-transition
       autoAngle += dt * (
@@ -466,7 +482,7 @@
       );
 
       group.rotation.y = autoAngle;
-      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH;
+      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH + deviceTilt;
       group.rotation.z = tiltZ + mouseX * MOUSE_TILT_STRENGTH * 0.5;
 
       renderer.render(scene, camera);
