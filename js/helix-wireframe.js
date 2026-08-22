@@ -344,6 +344,46 @@
     // only while it's directly over the widget.
     document.addEventListener("mousemove", handleMouseMove);
 
+    // Phone tilt maps the beta axis (front/back tilt) ABSOLUTELY, not
+    // relative to a baseline: 0deg means the phone is lying flat (screen
+    // facing up, like on a table) and maps to the helix's normal side-on
+    // view — full spiral visible. 90deg means the phone is held upright,
+    // the ordinary way you'd hold it to browse, and maps to the helix
+    // tipped 90deg so you're looking straight along its length instead —
+    // through the tube from one end. Everything between eases smoothly
+    // as the phone tilts through that range. gamma (left/right tilt)
+    // still feeds the small mouseRawX spin nudge above, same as before.
+    var orientationBaseGamma = null;
+    var DEVICE_TILT_SIGN = 1; // flip to -1 if this reads upside down on an actual phone
+    var DEVICE_TILT_EASE = 0.03; // slower than the mouse nudge — a structural swing, not a twitch
+    var deviceTiltTarget = 0; // 0 .. PI/2, the "flat table" -> "held upright" sweep
+    var deviceTilt = 0; // eased version actually applied in the render loop
+    function handleOrientation(e) {
+      if (e.beta == null || e.gamma == null) return;
+      if (orientationBaseGamma === null) {
+        orientationBaseGamma = e.gamma;
+      }
+      mouseRawX = THREE.MathUtils.clamp((e.gamma - orientationBaseGamma) / 30, -1, 1);
+      var betaClamped = THREE.MathUtils.clamp(e.beta, 0, 90);
+      deviceTiltTarget = DEVICE_TILT_SIGN * (betaClamped / 90) * (Math.PI / 2);
+    }
+    var orientationGateHandler = null;
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+      // iOS 13+ requires a user gesture before it will grant orientation access.
+      orientationGateHandler = function () {
+        DeviceOrientationEvent.requestPermission()
+          .then(function (state) {
+            if (state === "granted") {
+              window.addEventListener("deviceorientation", handleOrientation);
+            }
+          })
+          .catch(function () {});
+      };
+      document.addEventListener("touchend", orientationGateHandler, { once: true });
+    } else if (typeof window.DeviceOrientationEvent !== "undefined") {
+      window.addEventListener("deviceorientation", handleOrientation);
+    }
+
     var MIN_SCALE = 0.5;
     var MAX_SCALE = 1.2;
     var zoomTarget = 1;
@@ -497,6 +537,7 @@
       // replaces tiltX/tiltZ/spinSpeed, only nudges the final values.
       mouseX = THREE.MathUtils.lerp(mouseX, mouseRawX, MOUSE_EASE);
       mouseY = THREE.MathUtils.lerp(mouseY, mouseRawY, MOUSE_EASE);
+      deviceTilt = THREE.MathUtils.lerp(deviceTilt, deviceTiltTarget, DEVICE_TILT_EASE);
 
       var transitionBump = 4 * form * (1 - form); // 0..1, peaks mid-transition
       autoAngle += dt * (
@@ -506,7 +547,7 @@
       );
 
       group.rotation.y = autoAngle;
-      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH;
+      group.rotation.x = tiltX + mouseY * MOUSE_TILT_STRENGTH + deviceTilt;
       group.rotation.z = tiltZ + mouseX * MOUSE_TILT_STRENGTH * 0.5;
 
       renderer.render(scene, camera);
@@ -522,6 +563,10 @@
       window.removeEventListener("devicemotion", handleMotion);
       if (motionGateHandler) {
         document.removeEventListener("touchend", motionGateHandler);
+      }
+      window.removeEventListener("deviceorientation", handleOrientation);
+      if (orientationGateHandler) {
+        document.removeEventListener("touchend", orientationGateHandler);
       }
       pointsA.geometry.dispose();
       pointsA.material.dispose();
@@ -548,6 +593,4 @@
   }
 
   global.HelixWireframe = { init: init };
-})(window);
-
-
+})(window); 
