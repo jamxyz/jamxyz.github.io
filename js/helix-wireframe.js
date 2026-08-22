@@ -284,7 +284,7 @@
     // live values toward those targets a little each frame. Because the
     // easing is slow and continuous, the motion drifts rather than jumps —
     // there's no single frame where it visibly changes direction or pace.
-    var BASE_SPEED = 0.5; // rad/s, the speed it wanders around
+    var BASE_SPEED = 0.9; // rad/s, the speed it wanders around
     var SPEED_VARIANCE = 0.18; // +/- range for the wandering target
     var TILT_RANGE = 0.16; // radians, how far it can lean while wandering
     var WANDER_MIN = 5; // seconds between retargeting
